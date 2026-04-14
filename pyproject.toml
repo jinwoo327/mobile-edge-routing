@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mobile-edge-routing"
+version = "0.1.0"
+description = "Minimal research scaffold for single-turn mobile-edge collaborative LLM inference."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+edge-routing-run = "runner.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["datasets*", "models*", "routing*", "monitoring*", "evaluation*", "runner*"]
+
+[tool.setuptools.package-data]
+datasets = ["fixtures/*.jsonl"]
