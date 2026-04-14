@@ -16,7 +16,9 @@ DEFAULT_RUN_CONFIG: dict[str, Any] = {
     "log_dir": "logs",
     "local_backend": {
         "backend_type": "mock_local_backend",
+        "base_url": "http://localhost:11434",
         "model_name": "gemma3:1b",
+        "timeout": 60.0,
         "quantization": None,
     },
     "edge_backend": {
@@ -60,7 +62,9 @@ def apply_cli_overrides(config: dict[str, Any], args: Any) -> dict[str, Any]:
 
     local_overrides = {
         "local_backend_type": "backend_type",
+        "local_base_url": "base_url",
         "local_model_name": "model_name",
+        "local_timeout": "timeout",
         "local_quantization": "quantization",
     }
     for arg_name, config_key in local_overrides.items():

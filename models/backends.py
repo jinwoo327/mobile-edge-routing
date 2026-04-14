@@ -26,6 +26,70 @@ class ModelBackend(Protocol):
         ...
 
 
+def _build_prompt(sample: DatasetSample) -> tuple[str, str]:
+    if sample.task_type == "multiple_choice":
+        options = "\n".join(f"{chr(ord('A') + index)}. {choice}" for index, choice in enumerate(sample.choices))
+        return (
+            f"Question:\n{sample.question}\n\nChoices:\n{options}\n\n"
+            "Answer with only the single best choice letter.",
+            "You are a model for single-turn academic benchmarking. "
+            "Be concise and return only the requested answer format.",
+        )
+
+    return (
+        f"Solve the following math word problem and return only the final numeric answer.\n\nQuestion:\n{sample.question}",
+        "You are a model for single-turn academic benchmarking. "
+        "Return only the final numeric answer with no explanation.",
+    )
+
+
+def _normalize_prediction(sample: DatasetSample, generated_text: str) -> str:
+    if sample.task_type == "multiple_choice":
+        match = re.search(r"\b([ABCD])\b", generated_text.upper())
+        return match.group(1) if match else generated_text.strip()
+
+    matches = re.findall(r"[-+]?[0-9][0-9,]*(?:\.[0-9]+)?", generated_text)
+    if matches:
+        return matches[-1].replace(",", "")
+    return generated_text.strip()
+
+
+def _estimate_confidence_from_logprobs(response: dict[str, Any]) -> tuple[float | None, str | None]:
+    logprobs = response.get("logprobs") or []
+    values = [float(token.get("logprob", 0.0)) for token in logprobs if "logprob" in token]
+    if not values:
+        return None, None
+
+    average_logprob = sum(values) / len(values)
+    return max(0.0, min(1.0, math.exp(average_logprob))), "logprobs"
+
+
+def _estimate_confidence_from_output(sample: DatasetSample, generated_text: str) -> tuple[float, str]:
+    stripped = generated_text.strip()
+    if sample.task_type == "multiple_choice":
+        if re.fullmatch(r"[ABCDabcd]", stripped):
+            return 0.75, "format_heuristic"
+        if re.search(r"\b([ABCD])\b", stripped.upper()):
+            return 0.6, "format_heuristic"
+        return 0.3, "format_heuristic"
+
+    number_matches = re.findall(r"[-+]?[0-9][0-9,]*(?:\.[0-9]+)?", stripped)
+    if not number_matches:
+        return 0.2, "format_heuristic"
+    if stripped == number_matches[-1]:
+        return 0.7, "format_heuristic"
+    if len(number_matches) == 1:
+        return 0.5, "format_heuristic"
+    return 0.35, "format_heuristic"
+
+
+def _extract_confidence(sample: DatasetSample, response: dict[str, Any], generated_text: str) -> tuple[float, str]:
+    confidence, source = _estimate_confidence_from_logprobs(response)
+    if confidence is not None and source is not None:
+        return confidence, source
+    return _estimate_confidence_from_output(sample, generated_text)
+
+
 class MockLocalBackend:
     def __init__(self, model_name: str = "gemma3:1b", quantization: str | None = None):
         self.model_name = model_name
@@ -46,6 +110,7 @@ class MockLocalBackend:
                 "backend_type": "mock_local_backend",
                 "model_name": self.model_name,
                 "quantization": self.quantization,
+                "confidence_source": "mock_metadata",
             },
         )
 
@@ -85,6 +150,7 @@ class MockEdgeBackend:
                 "backend_type": "mock_edge_backend",
                 "model_name": self.model_name,
                 "quantization": self.quantization,
+                "confidence_source": "mock_metadata",
             },
         )
 
@@ -96,21 +162,24 @@ class MockEdgeBackend:
         return MockLocalBackend()._default_prediction(sample)
 
 
-class OllamaEdgeBackend:
+class OllamaGenerationBackend:
     def __init__(
         self,
-        base_url: str = "http://localhost:11434",
-        model_name: str = "gemma3:4b",
-        timeout: float = 60.0,
+        backend_type: str,
+        backend_name: str,
+        base_url: str,
+        model_name: str,
+        timeout: float,
         quantization: str | None = None,
         client: OllamaClient | None = None,
     ):
+        self.backend_type = backend_type
         self.base_url = base_url
         self.model_name = model_name
         self.timeout = timeout
         self.quantization = quantization
         self.client = client or OllamaClient(base_url=base_url, model_name=model_name, timeout=timeout)
-        self.name = "ollama_edge_backend"
+        self.name = backend_name
 
     def health_check(self) -> dict[str, Any]:
         return self.client.health_check()
@@ -119,22 +188,22 @@ class OllamaEdgeBackend:
         return self.client.ensure_model_available()
 
     def generate(self, sample: DatasetSample) -> InferenceResult:
-        prompt, system_prompt = self._build_prompt(sample)
+        prompt, system_prompt = _build_prompt(sample)
         started_at = time.perf_counter()
         response = self.client.generate(prompt=prompt, system=system_prompt)
         elapsed_ms = (time.perf_counter() - started_at) * 1000.0
         generated_text = str(response.get("response", "")).strip()
-        confidence = self._extract_confidence(response)
+        confidence, confidence_source = _extract_confidence(sample, response, generated_text)
         latency_ms = float(response.get("total_duration", 0)) / 1_000_000 if response.get("total_duration") else elapsed_ms
 
         return InferenceResult(
             backend_name=self.name,
-            prediction=self._normalize_prediction(sample, generated_text),
+            prediction=_normalize_prediction(sample, generated_text),
             confidence=confidence,
             latency_ms=latency_ms,
             metadata={
                 "source": "ollama",
-                "backend_type": "ollama_edge_backend",
+                "backend_type": self.backend_type,
                 "model_name": self.model_name,
                 "quantization": self.quantization,
                 "base_url": self.base_url,
@@ -142,51 +211,50 @@ class OllamaEdgeBackend:
                 "done_reason": response.get("done_reason"),
                 "prompt_eval_count": response.get("prompt_eval_count"),
                 "eval_count": response.get("eval_count"),
-                "confidence_source": "logprobs" if response.get("logprobs") else "unavailable",
+                "confidence_source": confidence_source,
                 "model_response": response,
             },
         )
 
-    @staticmethod
-    def _build_prompt(sample: DatasetSample) -> tuple[str, str]:
-        if sample.task_type == "multiple_choice":
-            options = "\n".join(f"{chr(ord('A') + index)}. {choice}" for index, choice in enumerate(sample.choices))
-            return (
-                f"Question:\n{sample.question}\n\nChoices:\n{options}\n\n"
-                "Answer with only the single best choice letter.",
-                "You are an edge model for single-turn academic benchmarking. "
-                "Be concise and return only the requested answer format.",
-            )
 
-        return (
-            f"Solve the following math word problem and return only the final numeric answer.\n\nQuestion:\n{sample.question}",
-            "You are an edge model for single-turn academic benchmarking. "
-            "Return only the final numeric answer with no explanation.",
+class RealLocalBackend(OllamaGenerationBackend):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model_name: str = "gemma3:1b",
+        timeout: float = 60.0,
+        quantization: str | None = None,
+        client: OllamaClient | None = None,
+    ):
+        super().__init__(
+            backend_type="real_local_backend",
+            backend_name="real_local_backend",
+            base_url=base_url,
+            model_name=model_name,
+            timeout=timeout,
+            quantization=quantization,
+            client=client,
         )
 
-    @staticmethod
-    def _normalize_prediction(sample: DatasetSample, generated_text: str) -> str:
-        if sample.task_type == "multiple_choice":
-            match = re.search(r"\b([ABCD])\b", generated_text.upper())
-            return match.group(1) if match else generated_text.strip()
 
-        matches = re.findall(r"[-+]?[0-9][0-9,]*(?:\.[0-9]+)?", generated_text)
-        if matches:
-            return matches[-1].replace(",", "")
-        return generated_text.strip()
-
-    @staticmethod
-    def _extract_confidence(response: dict[str, Any]) -> float:
-        logprobs = response.get("logprobs") or []
-        if not logprobs:
-            return 0.0
-
-        values = [float(token.get("logprob", 0.0)) for token in logprobs if "logprob" in token]
-        if not values:
-            return 0.0
-
-        average_logprob = sum(values) / len(values)
-        return max(0.0, min(1.0, math.exp(average_logprob)))
+class OllamaEdgeBackend(OllamaGenerationBackend):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:11434",
+        model_name: str = "gemma3:4b",
+        timeout: float = 60.0,
+        quantization: str | None = None,
+        client: OllamaClient | None = None,
+    ):
+        super().__init__(
+            backend_type="ollama_edge_backend",
+            backend_name="ollama_edge_backend",
+            base_url=base_url,
+            model_name=model_name,
+            timeout=timeout,
+            quantization=quantization,
+            client=client,
+        )
 
 
 @dataclass(slots=True)
@@ -201,6 +269,13 @@ class BackendConfig:
 def create_local_backend(config: BackendConfig) -> ModelBackend:
     if config.backend_type == "mock_local_backend":
         return MockLocalBackend(model_name=config.model_name, quantization=config.quantization)
+    if config.backend_type == "real_local_backend":
+        return RealLocalBackend(
+            base_url=config.base_url or "http://localhost:11434",
+            model_name=config.model_name,
+            timeout=config.timeout or 60.0,
+            quantization=config.quantization,
+        )
     raise ValueError(f"Unsupported local backend type: {config.backend_type}")
 
 

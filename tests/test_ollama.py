@@ -4,7 +4,8 @@ from io import BytesIO
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
-from models.backends import BackendConfig, OllamaEdgeBackend, create_edge_backend
+from datasets.common import DatasetSample
+from models.backends import BackendConfig, OllamaEdgeBackend, RealLocalBackend, create_edge_backend, create_local_backend
 from models.ollama_client import OllamaClient, OllamaConnectionError, OllamaModelNotFoundError
 
 
@@ -20,6 +21,20 @@ class FakeHttpResponse:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         return None
+
+
+class FakeOllamaClient:
+    def __init__(self, response: dict):
+        self.response = response
+
+    def health_check(self) -> dict:
+        return {"reachable": True, "model_available": True}
+
+    def ensure_model_available(self) -> dict:
+        return self.health_check()
+
+    def generate(self, prompt: str, system: str | None = None, options: dict | None = None) -> dict:
+        return self.response
 
 
 class OllamaTests(unittest.TestCase):
@@ -71,6 +86,38 @@ class OllamaTests(unittest.TestCase):
         )
         self.assertIsInstance(backend, OllamaEdgeBackend)
         self.assertEqual(backend.quantization, "Q4_K_M")
+
+    def test_backend_factory_creates_real_local_backend(self) -> None:
+        backend = create_local_backend(
+            BackendConfig(
+                backend_type="real_local_backend",
+                model_name="gemma3:1b",
+                base_url="http://localhost:11434",
+                timeout=60.0,
+                quantization="Q4_K_M",
+            )
+        )
+        self.assertIsInstance(backend, RealLocalBackend)
+        self.assertEqual(backend.quantization, "Q4_K_M")
+
+    def test_real_local_backend_uses_fallback_confidence_estimator(self) -> None:
+        sample = DatasetSample(
+            sample_id="1",
+            dataset="mmlu",
+            task_type="multiple_choice",
+            question="Capital of France?",
+            choices=["Berlin", "Paris", "Rome", "Madrid"],
+            answer="B",
+        )
+        backend = RealLocalBackend(
+            client=FakeOllamaClient({"response": "B", "total_duration": 1000000}),
+            model_name="gemma3:1b",
+        )
+        result = backend.generate(sample)
+
+        self.assertEqual(result.prediction, "B")
+        self.assertEqual(result.metadata["confidence_source"], "format_heuristic")
+        self.assertGreater(result.confidence, 0.0)
 
 
 if __name__ == "__main__":

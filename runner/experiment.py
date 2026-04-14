@@ -43,7 +43,9 @@ def run_experiment(
     data_path: str | None = None,
     log_dir: str | Path = "logs",
     local_backend_type: str = "mock_local_backend",
+    local_base_url: str = "http://localhost:11434",
     local_model_name: str = "gemma3:1b",
+    local_timeout: float = 60.0,
     local_quantization: str | None = None,
     edge_backend_type: str = "mock_edge_backend",
     edge_base_url: str = "http://localhost:11434",
@@ -60,7 +62,9 @@ def run_experiment(
 
     local_backend_config = BackendConfig(
         backend_type=local_backend_type,
+        base_url=local_base_url,
         model_name=local_model_name,
+        timeout=local_timeout,
         quantization=local_quantization,
     )
     edge_backend_config = BackendConfig(
@@ -78,7 +82,14 @@ def run_experiment(
 
     samples = _load_samples(dataset_name=dataset_name, limit=limit, data_path=data_path)
     results: list[dict] = []
+    local_health: dict[str, Any] | None = None
     edge_health: dict[str, Any] | None = None
+
+    if mode in {"local_only", "hybrid_only"} and hasattr(local_backend, "ensure_ready"):
+        try:
+            local_health = local_backend.ensure_ready()
+        except OllamaError:
+            raise
 
     if mode in {"edge_only", "hybrid_only"} and hasattr(edge_backend, "ensure_ready"):
         try:
@@ -96,7 +107,9 @@ def run_experiment(
         "data_path": data_path,
         "local_backend": {
             "backend_type": local_backend_type,
+            "base_url": local_base_url,
             "model_name": local_model_name,
+            "timeout": local_timeout,
             "quantization": local_quantization,
         },
         "edge_backend": {
@@ -106,6 +119,7 @@ def run_experiment(
             "timeout": edge_timeout,
             "quantization": edge_quantization,
         },
+        "local_health": local_health,
         "edge_health": edge_health,
     }
     write_json(metadata_path, run_metadata)
@@ -141,8 +155,18 @@ def run_experiment(
             "backend_used": decision.backend_used,
             "backend_role": backend_role,
             "backend_metadata": decision.final_result.metadata,
+            "confidence_source": decision.final_result.metadata.get("confidence_source"),
             "fell_back_to_edge": decision.fell_back_to_edge,
             "local_confidence": decision.local_result.confidence if decision.local_result else None,
+            "local_confidence_source": (
+                decision.local_result.metadata.get("confidence_source") if decision.local_result else None
+            ),
+            "local_backend_type": local_backend_type,
+            "local_model_name": local_model_name,
+            "local_quantization": local_quantization,
+            "edge_backend_type": edge_backend_type,
+            "edge_model_name": edge_model_name,
+            "edge_quantization": edge_quantization,
             "run_metadata": run_metadata,
             "battery_before": battery_before,
             "battery_after": battery_after,

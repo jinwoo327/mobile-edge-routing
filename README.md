@@ -12,7 +12,7 @@ Current scope:
 
 - single-turn inference only
 - datasets: MMLU and GSM8K
-- mock local backend standing in for Gemma 3 1B
+- selectable local backend: mock or Ollama-backed Gemma 3 1B
 - selectable edge backend: mock or Ollama-backed Gemma 3 4B
 - no smartphone integration yet
 - no real battery or network measurement yet
@@ -93,11 +93,17 @@ The runner accepts either direct CLI flags or a JSON config file.
 Example:
 
 ```bash
-python -m runner.cli --config configs/ollama_pilot.json
+python -m runner.cli --config configs/real_local_real_edge.json
 ```
 
 Important backend options:
 
+- `--local-backend-type mock_local_backend`
+- `--local-backend-type real_local_backend`
+- `--local-base-url http://localhost:11434`
+- `--local-model-name gemma3:1b`
+- `--local-timeout 60`
+- `--local-quantization Q4_K_M`
 - `--edge-backend-type mock_edge_backend`
 - `--edge-backend-type ollama_edge_backend`
 - `--edge-base-url http://localhost:11434`
@@ -130,6 +136,7 @@ Windows:
 2. Pull the edge model.
 
 ```bash
+ollama pull gemma3:1b
 ollama pull gemma3:4b
 ```
 
@@ -141,6 +148,17 @@ ollama serve
 
 4. Verify connectivity and model availability.
 
+Local:
+
+```bash
+python -m runner.cli \
+  --local-backend-type real_local_backend \
+  --local-model-name gemma3:1b \
+  --check-local-health
+```
+
+Edge:
+
 ```bash
 python -m runner.cli \
   --edge-backend-type ollama_edge_backend \
@@ -151,10 +169,23 @@ python -m runner.cli \
 You can also use:
 
 ```bash
+bash scripts/check_local_ollama.sh
 bash scripts/check_ollama.sh
 ```
 
-5. Run a small pilot experiment with mock local plus real Ollama edge.
+5. Run `local_only` with the real local backend.
+
+```bash
+python -m runner.cli \
+  --dataset all \
+  --mode local_only \
+  --limit 4 \
+  --local-backend-type real_local_backend \
+  --local-model-name gemma3:1b \
+  --local-base-url http://localhost:11434
+```
+
+6. Run a small pilot experiment with mock local plus real Ollama edge.
 
 ```bash
 python -m runner.cli \
@@ -166,7 +197,20 @@ python -m runner.cli \
   --edge-base-url http://localhost:11434
 ```
 
-6. Run edge-only with the real Ollama edge backend.
+7. Run `hybrid_only` with real local plus real edge.
+
+```bash
+python -m runner.cli \
+  --dataset all \
+  --mode hybrid_only \
+  --limit 4 \
+  --local-backend-type real_local_backend \
+  --local-model-name gemma3:1b \
+  --edge-backend-type ollama_edge_backend \
+  --edge-model-name gemma3:4b
+```
+
+8. Run edge-only with the real Ollama edge backend.
 
 ```bash
 python -m runner.cli \
@@ -175,6 +219,13 @@ python -m runner.cli \
   --limit 4 \
   --edge-backend-type ollama_edge_backend \
   --edge-model-name gemma3:4b
+```
+
+Smoke-test helpers:
+
+```bash
+bash scripts/smoke_local_real.sh
+bash scripts/smoke_hybrid_real.sh
 ```
 
 ## Bundled Mock Data
@@ -193,8 +244,34 @@ Some fixture samples include mock metadata such as `mock_local_prediction` and `
 Run metadata now records:
 
 - local backend type and model name
+- local base URL and timeout
 - edge backend type, base URL, and model name
 - local quantization
 - edge quantization
 
 This keeps fairness-related settings explicit without pushing battery or quantization awareness into the hybrid routing logic itself.
+
+Per-sample JSONL and grouped CSV outputs also carry local and edge quantization fields so later fair-comparison runs can be filtered or compared consistently.
+
+## Confidence Notes
+
+Hybrid routing still uses the same simple local-first rule:
+
+- run the local backend first
+- use the backend confidence score
+- fall back to edge when confidence is below the threshold
+
+When Ollama exposes usable token log probabilities, the backend converts them into a simple normalized confidence score. When that is unavailable, the repository uses a documented fallback confidence estimator based on answer-format compliance:
+
+- multiple choice: higher confidence for a clean single-letter answer
+- GSM8K-style math: higher confidence for a clean standalone numeric answer
+
+The confidence source is logged per sample.
+
+## Not Yet Implemented
+
+- Android or smartphone-local inference
+- real battery instrumentation on device
+- real mobile network measurement
+- multi-turn interactions
+- deployment packaging for phones

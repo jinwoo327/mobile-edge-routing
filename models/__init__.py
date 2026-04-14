@@ -5,6 +5,7 @@ from models.backends import (
     MockLocalBackend,
     ModelBackend,
     OllamaEdgeBackend,
+    RealLocalBackend,
     create_edge_backend,
     create_local_backend,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "OllamaError",
     "OllamaModelNotFoundError",
     "OllamaResponseError",
+    "RealLocalBackend",
     "create_edge_backend",
     "create_local_backend",
 ]
