@@ -31,8 +31,8 @@ def summarize_results(results: list[dict[str, Any]], block_sizes: list[int]) -> 
                         "accuracy": round(sum(item["is_correct"] for item in block) / len(block), 4),
                         "fallback_rate": round(sum(item["fell_back_to_edge"] for item in block) / len(block), 4),
                         "mean_latency_ms": round(sum(item["latency_ms"] for item in block) / len(block), 2),
-                        "local_share": round(sum(item["backend_used"].startswith("mock_local") for item in block) / len(block), 4),
-                        "edge_share": round(sum(item["backend_used"].startswith("mock_edge") for item in block) / len(block), 4),
+                        "local_share": round(sum(item["backend_role"] == "local" for item in block) / len(block), 4),
+                        "edge_share": round(sum(item["backend_role"] == "edge" for item in block) / len(block), 4),
                     }
                 )
     return summaries

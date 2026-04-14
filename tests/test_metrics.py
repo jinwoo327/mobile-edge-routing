@@ -37,6 +37,7 @@ class MetricsTests(unittest.TestCase):
                     "fell_back_to_edge": False,
                     "latency_ms": 30.0,
                     "backend_used": "mock_local_gemma3_1b",
+                    "backend_role": "local",
                 },
                 {
                     "dataset": "mmlu",
@@ -45,6 +46,7 @@ class MetricsTests(unittest.TestCase):
                     "fell_back_to_edge": True,
                     "latency_ms": 120.0,
                     "backend_used": "mock_edge_gemma3_4b",
+                    "backend_role": "edge",
                 },
             ],
             block_sizes=[20],

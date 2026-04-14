@@ -1,3 +1,33 @@
-from models.backends import InferenceResult, MockEdgeBackend, MockLocalBackend, ModelBackend
+from models.backends import (
+    BackendConfig,
+    InferenceResult,
+    MockEdgeBackend,
+    MockLocalBackend,
+    ModelBackend,
+    OllamaEdgeBackend,
+    create_edge_backend,
+    create_local_backend,
+)
+from models.ollama_client import (
+    OllamaClient,
+    OllamaConnectionError,
+    OllamaError,
+    OllamaModelNotFoundError,
+    OllamaResponseError,
+)
 
-__all__ = ["InferenceResult", "MockEdgeBackend", "MockLocalBackend", "ModelBackend"]
+__all__ = [
+    "BackendConfig",
+    "InferenceResult",
+    "MockEdgeBackend",
+    "MockLocalBackend",
+    "ModelBackend",
+    "OllamaClient",
+    "OllamaConnectionError",
+    "OllamaEdgeBackend",
+    "OllamaError",
+    "OllamaModelNotFoundError",
+    "OllamaResponseError",
+    "create_edge_backend",
+    "create_local_backend",
+]

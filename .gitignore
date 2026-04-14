@@ -11,4 +11,5 @@ dist/
 
 logs/*.jsonl
 logs/*.csv
+logs/*-metadata.json
 !logs/.gitkeep

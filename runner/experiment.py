@@ -3,13 +3,15 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from datasets.common import DatasetSample
 from datasets.loaders import load_dataset
-from evaluation.logging import append_jsonl
+from evaluation.logging import append_jsonl, write_json
 from evaluation.metrics import evaluate_prediction
 from evaluation.summary import summarize_results, write_summary_csv
-from models.backends import MockEdgeBackend, MockLocalBackend
+from models.backends import BackendConfig, create_edge_backend, create_local_backend
+from models.ollama_client import OllamaError
 from monitoring.interfaces import MockBatteryMonitor, MockNetworkMonitor
 from routing.modes import ExecutionMode, execute_mode
 
@@ -19,6 +21,7 @@ class RunArtifacts:
     run_id: str
     jsonl_path: Path
     summary_csv_path: Path
+    metadata_path: Path
     sample_count: int
     summary_rows: int
 
@@ -39,20 +42,73 @@ def run_experiment(
     block_sizes: list[int] | None = None,
     data_path: str | None = None,
     log_dir: str | Path = "logs",
+    local_backend_type: str = "mock_local_backend",
+    local_model_name: str = "gemma3:1b",
+    local_quantization: str | None = None,
+    edge_backend_type: str = "mock_edge_backend",
+    edge_base_url: str = "http://localhost:11434",
+    edge_model_name: str = "gemma3:4b",
+    edge_timeout: float = 60.0,
+    edge_quantization: str | None = None,
 ) -> RunArtifacts:
     block_sizes = block_sizes or [20, 50, 100]
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_path = Path(log_dir)
     jsonl_path = log_path / f"run-{run_id}.jsonl"
     summary_csv_path = log_path / f"summary-{run_id}.csv"
+    metadata_path = log_path / f"run-{run_id}-metadata.json"
 
-    local_backend = MockLocalBackend()
-    edge_backend = MockEdgeBackend()
+    local_backend_config = BackendConfig(
+        backend_type=local_backend_type,
+        model_name=local_model_name,
+        quantization=local_quantization,
+    )
+    edge_backend_config = BackendConfig(
+        backend_type=edge_backend_type,
+        model_name=edge_model_name,
+        quantization=edge_quantization,
+        base_url=edge_base_url,
+        timeout=edge_timeout,
+    )
+
+    local_backend = create_local_backend(local_backend_config)
+    edge_backend = create_edge_backend(edge_backend_config)
     battery_monitor = MockBatteryMonitor()
     network_monitor = MockNetworkMonitor()
 
     samples = _load_samples(dataset_name=dataset_name, limit=limit, data_path=data_path)
     results: list[dict] = []
+    edge_health: dict[str, Any] | None = None
+
+    if mode in {"edge_only", "hybrid_only"} and hasattr(edge_backend, "ensure_ready"):
+        try:
+            edge_health = edge_backend.ensure_ready()
+        except OllamaError:
+            raise
+
+    run_metadata = {
+        "run_id": run_id,
+        "dataset": dataset_name,
+        "mode": mode,
+        "limit": limit,
+        "confidence_threshold": confidence_threshold,
+        "block_sizes": block_sizes,
+        "data_path": data_path,
+        "local_backend": {
+            "backend_type": local_backend_type,
+            "model_name": local_model_name,
+            "quantization": local_quantization,
+        },
+        "edge_backend": {
+            "backend_type": edge_backend_type,
+            "base_url": edge_base_url,
+            "model_name": edge_model_name,
+            "timeout": edge_timeout,
+            "quantization": edge_quantization,
+        },
+        "edge_health": edge_health,
+    }
+    write_json(metadata_path, run_metadata)
 
     for sample in samples:
         battery_before = asdict(battery_monitor.snapshot())
@@ -69,6 +125,7 @@ def run_experiment(
         battery_after = asdict(battery_monitor.snapshot())
         network_after = asdict(network_monitor.snapshot())
         is_correct = evaluate_prediction(sample, decision.final_result.prediction)
+        backend_role = "local" if decision.local_result and decision.backend_used == decision.local_result.backend_name else "edge"
 
         record = {
             "run_id": run_id,
@@ -82,8 +139,11 @@ def run_experiment(
             "confidence": decision.final_result.confidence,
             "latency_ms": decision.final_result.latency_ms,
             "backend_used": decision.backend_used,
+            "backend_role": backend_role,
+            "backend_metadata": decision.final_result.metadata,
             "fell_back_to_edge": decision.fell_back_to_edge,
             "local_confidence": decision.local_result.confidence if decision.local_result else None,
+            "run_metadata": run_metadata,
             "battery_before": battery_before,
             "battery_after": battery_after,
             "network_before": network_before,
@@ -99,6 +159,7 @@ def run_experiment(
         run_id=run_id,
         jsonl_path=jsonl_path,
         summary_csv_path=summary_csv_path,
+        metadata_path=metadata_path,
         sample_count=len(results),
         summary_rows=len(summary_rows),
     )
