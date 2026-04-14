@@ -1,5 +1,6 @@
 {
   "dataset": "all",
+  "dataset_source": "fixture",
   "mode": "hybrid_only",
   "limit": 8,
   "confidence_threshold": 0.6,
@@ -9,7 +10,8 @@
     "base_url": "http://localhost:11434",
     "model_name": "gemma3:1b",
     "timeout": 60.0,
-    "quantization": null
+    "quantization": null,
+    "confidence_estimator": "router_v1"
   },
   "edge_backend": {
     "backend_type": "mock_edge_backend",

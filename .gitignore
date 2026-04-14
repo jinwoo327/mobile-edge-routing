@@ -12,4 +12,6 @@ dist/
 logs/*.jsonl
 logs/*.csv
 logs/*-metadata.json
+logs/compare/*.csv
+logs/compare/*.png
 !logs/.gitkeep

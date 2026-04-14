@@ -119,6 +119,38 @@ class OllamaTests(unittest.TestCase):
         self.assertEqual(result.metadata["confidence_source"], "format_heuristic")
         self.assertGreater(result.confidence, 0.0)
 
+    def test_router_v1_penalizes_more_complex_question(self) -> None:
+        simple_sample = DatasetSample(
+            sample_id="1",
+            dataset="mmlu",
+            task_type="multiple_choice",
+            question="Capital of France?",
+            choices=["Berlin", "Paris", "Rome", "Madrid"],
+            answer="B",
+        )
+        complex_sample = DatasetSample(
+            sample_id="2",
+            dataset="mmlu",
+            task_type="multiple_choice",
+            question=(
+                "Find the degree for the given field extension Q(sqrt(2), sqrt(3), sqrt(18)) over Q "
+                "and identify the correct option among the following statements."
+            ),
+            choices=["1", "2", "4", "8"],
+            answer="C",
+        )
+        backend = RealLocalBackend(
+            client=FakeOllamaClient({"response": "C", "total_duration": 1000000}),
+            model_name="gemma3:1b",
+            confidence_estimator="router_v1",
+        )
+
+        simple_result = backend.generate(simple_sample)
+        complex_result = backend.generate(complex_sample)
+
+        self.assertEqual(simple_result.metadata["confidence_source"], "router_v1")
+        self.assertLess(complex_result.confidence, simple_result.confidence)
+
 
 if __name__ == "__main__":
     unittest.main()

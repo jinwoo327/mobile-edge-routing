@@ -62,7 +62,7 @@ python -m unittest discover -s tests
 4. Run a smoke test with bundled mock data.
 
 ```bash
-python -m runner.cli --dataset all --mode hybrid_only --limit 8
+python -m runner.cli --dataset all --dataset-source fixture --mode hybrid_only --limit 8
 ```
 
 You can also use the helper script:
@@ -76,6 +76,7 @@ bash scripts/smoke_test.sh
 ```bash
 python -m runner.cli \
   --dataset mmlu \
+  --dataset-source fixture \
   --mode hybrid_only \
   --limit 4
 ```
@@ -104,6 +105,7 @@ Important backend options:
 - `--local-model-name gemma3:1b`
 - `--local-timeout 60`
 - `--local-quantization Q4_K_M`
+- `--local-confidence-estimator router_v1`
 - `--edge-backend-type mock_edge_backend`
 - `--edge-backend-type ollama_edge_backend`
 - `--edge-base-url http://localhost:11434`
@@ -114,6 +116,20 @@ Important backend options:
 - `--local-quantization Q4_K_M`
 
 Quantization is tracked as metadata only in this version. It is not hardcoded into routing logic, so later experiments can align local and edge quantization for fair comparisons.
+
+For hybrid routing, the local confidence estimator is also configurable:
+
+- `format_heuristic`: legacy output-shape heuristic
+- `router_v1`: improved single-pass heuristic that combines answer format with question complexity penalties
+
+Important dataset options:
+
+- `--dataset gsm8k`
+- `--dataset mmlu`
+- `--dataset-source fixture`
+- `--dataset-source real`
+- `--data-path datasets/real/gsm8k`
+- `--data-path datasets/real/mmlu`
 
 ## Ollama Setup
 
@@ -239,6 +255,182 @@ These are not benchmark distributions. They are just smoke-test inputs.
 
 Some fixture samples include mock metadata such as `mock_local_prediction` and `mock_local_confidence`. That keeps routing behavior deterministic during early development. Real experiments should replace the mock backends and point the loaders at real dataset files.
 
+## Real Dataset Layout
+
+Fixture mode and real mode are separate:
+
+- fixture mode loads the tiny bundled smoke-test files
+- real mode loads larger local files or directories that you provide
+
+Default real dataset locations:
+
+- `datasets/real/gsm8k/`
+- `datasets/real/mmlu/`
+
+You can also override these with `--data-path`.
+
+Automatic download helper:
+
+```bash
+pip install datasets
+python scripts/download_real_datasets.py --dataset gsm8k
+python scripts/download_real_datasets.py --dataset mmlu
+```
+
+This helper removes the repo root from `sys.path` before importing Hugging Face `datasets`, so it avoids the local `datasets/` package name collision.
+
+### Real GSM8K
+
+Expected input:
+
+- a `.jsonl` file
+- a `.json` file containing a list of records
+- or a directory containing one or more `.jsonl` / `.json` files
+
+Expected record fields:
+
+- `question`
+- `answer`
+- optional `id`
+
+Recommended placement:
+
+- `datasets/real/gsm8k/test.jsonl`
+
+### Real MMLU
+
+Expected input:
+
+- a `.csv` file
+- a `.jsonl` file
+- a `.json` file containing a list of records
+- or a directory containing one or more `.csv` / `.jsonl` / `.json` files
+
+Expected record fields:
+
+- `question`
+- either `choices` or the four columns `A`, `B`, `C`, `D`
+- `answer` or `target`
+- optional `id`
+- optional `subject`
+
+Recommended placement:
+
+- `datasets/real/mmlu/<subject>.csv`
+- or `python scripts/download_real_datasets.py --dataset mmlu`, which writes `datasets/real/mmlu/all_test.jsonl` by default
+
+CSV format example:
+
+```text
+question,A,B,C,D,answer
+2+2=?,3,4,5,6,B
+```
+
+When loading MMLU from a directory of CSV files, the filename stem is used as `subject` metadata if the file does not already provide it.
+
+## Dataset Examples
+
+4-sample fixture GSM8K smoke test:
+
+```bash
+python -m runner.cli \
+  --dataset gsm8k \
+  --dataset-source fixture \
+  --mode local_only \
+  --limit 4
+```
+
+20-sample real GSM8K experiment:
+
+```bash
+python -m runner.cli \
+  --dataset gsm8k \
+  --dataset-source real \
+  --data-path datasets/real/gsm8k \
+  --mode local_only \
+  --limit 20
+```
+
+Shortcut script:
+
+```bash
+bash scripts/run_real_experiment.sh
+```
+
+Examples:
+
+```bash
+DATASET=mmlu bash scripts/run_real_experiment.sh
+MODE=hybrid_only LOCAL_BACKEND_TYPE=real_local_backend EDGE_BACKEND_TYPE=ollama_edge_backend bash scripts/run_real_experiment.sh
+LIMIT=50 DATASET=gsm8k bash scripts/run_real_experiment.sh
+```
+
+20-sample real MMLU experiment:
+
+```bash
+python -m runner.cli \
+  --dataset mmlu \
+  --dataset-source real \
+  --data-path datasets/real/mmlu \
+  --mode local_only \
+  --limit 20
+```
+
+Run all three modes at once with configurable dataset and sample count:
+
+```bash
+bash scripts/run_all_modes.sh
+```
+
+Examples:
+
+```bash
+DATASET=mmlu LIMIT=20 bash scripts/run_all_modes.sh
+DATASET=gsm8k LIMIT=50 bash scripts/run_all_modes.sh
+DATASET_SOURCE=fixture DATASET=gsm8k LIMIT=4 bash scripts/run_all_modes.sh
+CONFIDENCE_THRESHOLD=0.7 DATASET=mmlu LIMIT=20 bash scripts/run_all_modes.sh
+```
+
+`run_all_modes.sh` now also writes a combined comparison CSV to:
+
+- `logs/compare/<dataset>-<dataset_source>-<limit>-compare.csv`
+
+and, if `matplotlib` is installed, a quality-latency plot to:
+
+- `logs/compare/<dataset>-<dataset_source>-<limit>-compare.png`
+
+You can control warm-up exclusion for latency comparison with:
+
+```bash
+EXCLUDE_FIRST_N_LATENCY=1 bash scripts/run_all_modes.sh
+```
+
+Compare completed runs into one CSV:
+
+```bash
+python scripts/compare_runs.py \
+  --run-ids 20260414-191938 20260414-192103 20260414-192332 \
+  --output-csv logs/mmlu-20-compare.csv
+```
+
+Quality-latency scatter plot:
+
+```bash
+python scripts/compare_runs.py \
+  --run-ids 20260414-191938 20260414-192103 20260414-192332 \
+  --output-csv logs/mmlu-20-compare.csv \
+  --plot-path logs/mmlu-20-compare.png
+```
+
+Equivalent config examples:
+
+- `configs/fixture_gsm8k.json`
+- `configs/real_gsm8k.json`
+- `configs/fixture_mmlu.json`
+- `configs/real_mmlu.json`
+
+If the requested `--limit` is larger than the available dataset size, the runner prints a warning and evaluates all available samples.
+
 ## Fairness Tracking
 
 Run metadata now records:
@@ -267,6 +459,37 @@ When Ollama exposes usable token log probabilities, the backend converts them in
 - GSM8K-style math: higher confidence for a clean standalone numeric answer
 
 The confidence source is logged per sample.
+
+## Router Analysis
+
+Threshold sweep for hybrid routing:
+
+```bash
+python scripts/threshold_sweep.py \
+  --dataset mmlu \
+  --dataset-source real \
+  --data-path datasets/real/mmlu \
+  --limit 50 \
+  --local-backend-type real_local_backend \
+  --edge-backend-type ollama_edge_backend \
+  --local-confidence-estimator router_v1
+```
+
+Pareto CSV and plot generation from a sweep:
+
+```bash
+python scripts/pareto_analyze.py \
+  --input-csv logs/sweeps/sweep-<id>.csv \
+  --plot-path logs/sweeps/sweep-<id>-pareto.png
+```
+
+The Pareto analysis treats:
+
+- `accuracy` as quality
+- `mean_latency_ms` as latency
+- `edge_rate` as a communication/cost proxy
+
+This keeps the current repo explicit about the fact that real battery measurement is still not implemented.
 
 ## Not Yet Implemented
 

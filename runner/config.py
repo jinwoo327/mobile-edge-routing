@@ -8,6 +8,7 @@ from typing import Any
 
 DEFAULT_RUN_CONFIG: dict[str, Any] = {
     "dataset": "all",
+    "dataset_source": "fixture",
     "data_path": None,
     "mode": "hybrid_only",
     "limit": None,
@@ -20,6 +21,7 @@ DEFAULT_RUN_CONFIG: dict[str, Any] = {
         "model_name": "gemma3:1b",
         "timeout": 60.0,
         "quantization": None,
+        "confidence_estimator": "router_v1",
     },
     "edge_backend": {
         "backend_type": "mock_edge_backend",
@@ -48,6 +50,7 @@ def apply_cli_overrides(config: dict[str, Any], args: Any) -> dict[str, Any]:
 
     scalar_mappings = {
         "dataset": "dataset",
+        "dataset_source": "dataset_source",
         "data_path": "data_path",
         "mode": "mode",
         "limit": "limit",
@@ -66,6 +69,7 @@ def apply_cli_overrides(config: dict[str, Any], args: Any) -> dict[str, Any]:
         "local_model_name": "model_name",
         "local_timeout": "timeout",
         "local_quantization": "quantization",
+        "local_confidence_estimator": "confidence_estimator",
     }
     for arg_name, config_key in local_overrides.items():
         value = getattr(args, arg_name)

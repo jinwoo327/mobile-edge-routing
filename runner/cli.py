@@ -13,6 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run single-turn mobile-edge routing experiments.")
     parser.add_argument("--config", default=None, help="Optional JSON config file.")
     parser.add_argument("--dataset", choices=["mmlu", "gsm8k", "all"], default=None)
+    parser.add_argument("--dataset-source", choices=["fixture", "real"], default=None)
     parser.add_argument("--data-path", default=None, help="Optional path to a dataset JSONL file.")
     parser.add_argument("--mode", choices=["local_only", "edge_only", "hybrid_only"], default=None)
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of samples to run.")
@@ -24,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local-model-name", default=None)
     parser.add_argument("--local-timeout", type=float, default=None)
     parser.add_argument("--local-quantization", default=None)
+    parser.add_argument("--local-confidence-estimator", choices=["format_heuristic", "router_v1"], default=None)
     parser.add_argument("--edge-backend-type", choices=["mock_edge_backend", "ollama_edge_backend"], default=None)
     parser.add_argument("--edge-base-url", default=None)
     parser.add_argument("--edge-model-name", default=None)
@@ -80,6 +82,7 @@ def check_local_health(config: dict) -> int:
             quantization=config["local_backend"].get("quantization"),
             base_url=config["local_backend"].get("base_url"),
             timeout=config["local_backend"].get("timeout"),
+            confidence_estimator=config["local_backend"].get("confidence_estimator", "router_v1"),
         )
     )
     return _check_backend_health(
@@ -119,6 +122,7 @@ def main() -> None:
     try:
         artifacts = run_experiment(
             dataset_name=config["dataset"],
+            dataset_source=config["dataset_source"],
             mode=config["mode"],
             limit=config["limit"],
             confidence_threshold=config["confidence_threshold"],
@@ -130,6 +134,7 @@ def main() -> None:
             local_model_name=config["local_backend"]["model_name"],
             local_timeout=config["local_backend"]["timeout"],
             local_quantization=config["local_backend"]["quantization"],
+            local_confidence_estimator=config["local_backend"]["confidence_estimator"],
             edge_backend_type=config["edge_backend"]["backend_type"],
             edge_base_url=config["edge_backend"]["base_url"],
             edge_model_name=config["edge_backend"]["model_name"],

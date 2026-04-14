@@ -26,6 +26,9 @@ class ModelBackend(Protocol):
         ...
 
 
+ConfidenceEstimator = str
+
+
 def _build_prompt(sample: DatasetSample) -> tuple[str, str]:
     if sample.task_type == "multiple_choice":
         options = "\n".join(f"{chr(ord('A') + index)}. {choice}" for index, choice in enumerate(sample.choices))
@@ -64,7 +67,7 @@ def _estimate_confidence_from_logprobs(response: dict[str, Any]) -> tuple[float 
     return max(0.0, min(1.0, math.exp(average_logprob))), "logprobs"
 
 
-def _estimate_confidence_from_output(sample: DatasetSample, generated_text: str) -> tuple[float, str]:
+def _estimate_format_confidence(sample: DatasetSample, generated_text: str) -> tuple[float, str]:
     stripped = generated_text.strip()
     if sample.task_type == "multiple_choice":
         if re.fullmatch(r"[ABCDabcd]", stripped):
@@ -82,18 +85,97 @@ def _estimate_confidence_from_output(sample: DatasetSample, generated_text: str)
         return 0.5, "format_heuristic"
     return 0.35, "format_heuristic"
 
+def _estimate_router_v1_confidence(sample: DatasetSample, generated_text: str) -> tuple[float, str]:
+    base_confidence, _ = _estimate_format_confidence(sample, generated_text)
+    stripped = generated_text.strip()
+    question = sample.question
+    question_length = len(question)
+    question_numbers = len(re.findall(r"[-+]?[0-9][0-9,]*(?:\.[0-9]+)?", question))
+    reasoning_words = len(
+        re.findall(r"\b(each|every|after|before|left|remain|remaining|total|together|least|except|field|degree)\b", question.lower())
+    )
+    symbol_complexity = len(re.findall(r"[=+\-*/^_(){}\[\]]", question))
+    output_tokens = len(stripped.split())
 
-def _extract_confidence(sample: DatasetSample, response: dict[str, Any], generated_text: str) -> tuple[float, str]:
+    confidence = base_confidence
+    if sample.task_type == "multiple_choice":
+        if question_length > 180:
+            confidence -= 0.15
+        elif question_length > 120:
+            confidence -= 0.1
+        elif question_length > 80:
+            confidence -= 0.05
+
+        if question_numbers >= 6:
+            confidence -= 0.12
+        elif question_numbers >= 3:
+            confidence -= 0.07
+
+        if symbol_complexity >= 6:
+            confidence -= 0.1
+        elif symbol_complexity >= 2:
+            confidence -= 0.05
+
+        if reasoning_words >= 2:
+            confidence -= 0.06
+
+        if output_tokens > 1:
+            confidence -= 0.08
+        elif re.fullmatch(r"[ABCDabcd]", stripped):
+            confidence += 0.03
+    else:
+        if question_length > 220:
+            confidence -= 0.18
+        elif question_length > 140:
+            confidence -= 0.12
+        elif question_length > 90:
+            confidence -= 0.06
+
+        if question_numbers >= 6:
+            confidence -= 0.16
+        elif question_numbers >= 4:
+            confidence -= 0.1
+        elif question_numbers >= 2:
+            confidence -= 0.04
+
+        if reasoning_words >= 3:
+            confidence -= 0.1
+        elif reasoning_words >= 1:
+            confidence -= 0.05
+
+        if re.fullmatch(r"[-+]?[0-9][0-9,]*(?:\.[0-9]+)?", stripped):
+            confidence += 0.04
+        elif output_tokens > 3:
+            confidence -= 0.08
+
+    confidence = max(0.05, min(0.95, confidence))
+    return confidence, "router_v1"
+
+
+def _extract_confidence(
+    sample: DatasetSample,
+    response: dict[str, Any],
+    generated_text: str,
+    confidence_estimator: ConfidenceEstimator,
+) -> tuple[float, str]:
     confidence, source = _estimate_confidence_from_logprobs(response)
     if confidence is not None and source is not None:
         return confidence, source
-    return _estimate_confidence_from_output(sample, generated_text)
+    if confidence_estimator == "router_v1":
+        return _estimate_router_v1_confidence(sample, generated_text)
+    return _estimate_format_confidence(sample, generated_text)
 
 
 class MockLocalBackend:
-    def __init__(self, model_name: str = "gemma3:1b", quantization: str | None = None):
+    def __init__(
+        self,
+        model_name: str = "gemma3:1b",
+        quantization: str | None = None,
+        confidence_estimator: ConfidenceEstimator = "format_heuristic",
+    ):
         self.model_name = model_name
         self.quantization = quantization
+        self.confidence_estimator = confidence_estimator
         self.name = "mock_local_gemma3_1b"
 
     def generate(self, sample: DatasetSample) -> InferenceResult:
@@ -111,6 +193,7 @@ class MockLocalBackend:
                 "model_name": self.model_name,
                 "quantization": self.quantization,
                 "confidence_source": "mock_metadata",
+                "confidence_estimator": self.confidence_estimator,
             },
         )
 
@@ -171,6 +254,7 @@ class OllamaGenerationBackend:
         model_name: str,
         timeout: float,
         quantization: str | None = None,
+        confidence_estimator: ConfidenceEstimator = "format_heuristic",
         client: OllamaClient | None = None,
     ):
         self.backend_type = backend_type
@@ -178,6 +262,7 @@ class OllamaGenerationBackend:
         self.model_name = model_name
         self.timeout = timeout
         self.quantization = quantization
+        self.confidence_estimator = confidence_estimator
         self.client = client or OllamaClient(base_url=base_url, model_name=model_name, timeout=timeout)
         self.name = backend_name
 
@@ -193,7 +278,12 @@ class OllamaGenerationBackend:
         response = self.client.generate(prompt=prompt, system=system_prompt)
         elapsed_ms = (time.perf_counter() - started_at) * 1000.0
         generated_text = str(response.get("response", "")).strip()
-        confidence, confidence_source = _extract_confidence(sample, response, generated_text)
+        confidence, confidence_source = _extract_confidence(
+            sample,
+            response,
+            generated_text,
+            confidence_estimator=self.confidence_estimator,
+        )
         latency_ms = float(response.get("total_duration", 0)) / 1_000_000 if response.get("total_duration") else elapsed_ms
 
         return InferenceResult(
@@ -212,6 +302,7 @@ class OllamaGenerationBackend:
                 "prompt_eval_count": response.get("prompt_eval_count"),
                 "eval_count": response.get("eval_count"),
                 "confidence_source": confidence_source,
+                "confidence_estimator": self.confidence_estimator,
                 "model_response": response,
             },
         )
@@ -224,6 +315,7 @@ class RealLocalBackend(OllamaGenerationBackend):
         model_name: str = "gemma3:1b",
         timeout: float = 60.0,
         quantization: str | None = None,
+        confidence_estimator: ConfidenceEstimator = "format_heuristic",
         client: OllamaClient | None = None,
     ):
         super().__init__(
@@ -233,6 +325,7 @@ class RealLocalBackend(OllamaGenerationBackend):
             model_name=model_name,
             timeout=timeout,
             quantization=quantization,
+            confidence_estimator=confidence_estimator,
             client=client,
         )
 
@@ -244,6 +337,7 @@ class OllamaEdgeBackend(OllamaGenerationBackend):
         model_name: str = "gemma3:4b",
         timeout: float = 60.0,
         quantization: str | None = None,
+        confidence_estimator: ConfidenceEstimator = "format_heuristic",
         client: OllamaClient | None = None,
     ):
         super().__init__(
@@ -253,6 +347,7 @@ class OllamaEdgeBackend(OllamaGenerationBackend):
             model_name=model_name,
             timeout=timeout,
             quantization=quantization,
+            confidence_estimator=confidence_estimator,
             client=client,
         )
 
@@ -264,17 +359,23 @@ class BackendConfig:
     quantization: str | None = None
     base_url: str | None = None
     timeout: float | None = None
+    confidence_estimator: ConfidenceEstimator = "format_heuristic"
 
 
 def create_local_backend(config: BackendConfig) -> ModelBackend:
     if config.backend_type == "mock_local_backend":
-        return MockLocalBackend(model_name=config.model_name, quantization=config.quantization)
+        return MockLocalBackend(
+            model_name=config.model_name,
+            quantization=config.quantization,
+            confidence_estimator=config.confidence_estimator,
+        )
     if config.backend_type == "real_local_backend":
         return RealLocalBackend(
             base_url=config.base_url or "http://localhost:11434",
             model_name=config.model_name,
             timeout=config.timeout or 60.0,
             quantization=config.quantization,
+            confidence_estimator=config.confidence_estimator,
         )
     raise ValueError(f"Unsupported local backend type: {config.backend_type}")
 

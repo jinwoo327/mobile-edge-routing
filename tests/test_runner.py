@@ -1,6 +1,8 @@
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from runner.experiment import run_experiment
@@ -27,6 +29,8 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(record["run_metadata"]["edge_backend"]["quantization"], "Q4_K_M")
             self.assertEqual(record["local_quantization"], "Q4_K_M")
             self.assertEqual(record["edge_quantization"], "Q4_K_M")
+            self.assertEqual(record["dataset_source"], "fixture")
+            self.assertEqual(record["local_confidence_estimator"], "router_v1")
 
     def test_run_experiment_writes_backend_identity_to_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -46,6 +50,21 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("edge_quantization", summary_lines[0])
             self.assertIn("mock_local_backend", summary_lines[1])
             self.assertIn("mock_edge_backend", summary_lines[1])
+
+    def test_run_experiment_prints_dataset_limit_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                artifacts = run_experiment(
+                    dataset_name="gsm8k",
+                    dataset_source="fixture",
+                    mode="local_only",
+                    limit=20,
+                    log_dir=tmp_dir,
+                )
+
+            self.assertEqual(artifacts.sample_count, 4)
+            self.assertIn("Requested limit 20", output.getvalue())
 
 
 if __name__ == "__main__":
