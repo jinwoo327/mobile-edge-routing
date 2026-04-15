@@ -59,7 +59,7 @@ def write_comparison_csv(path: str | Path, rows: list[dict[str, Any]]) -> None:
 def plot_quality_latency(
     rows: list[dict[str, Any]],
     output_path: str | Path,
-    x_key: str = "mean_latency_ms",
+    x_key: str = "median_latency_ms",
 ) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -95,9 +95,13 @@ def plot_quality_latency(
             fontsize=9,
         )
 
-    x_label = "Mean Latency (ms)"
-    if x_key == "mean_latency_ms_excluding_warmup":
-        x_label = "Mean Latency Excluding Warm-up (ms)"
+    x_labels = {
+        "mean_latency_ms": "Mean Latency (ms)",
+        "median_latency_ms": "Median Latency (ms)",
+        "mean_latency_ms_excluding_warmup": "Mean Latency Excluding Warm-up (ms)",
+        "median_latency_ms_excluding_warmup": "Median Latency Excluding Warm-up (ms)",
+    }
+    x_label = x_labels.get(x_key, x_key)
     ax.set_xlabel(x_label)
     ax.set_ylabel("Accuracy")
     ax.set_title("Quality-Latency Comparison Across Modes")

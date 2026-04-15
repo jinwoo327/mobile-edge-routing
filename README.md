@@ -19,6 +19,29 @@ Current scope:
 
 The repository is intentionally lightweight so a student team can extend it without untangling framework-heavy code.
 
+## What `git clone` Gives You
+
+Cloning the repository gives you:
+
+- all Python source code
+- configs
+- scripts
+- tests
+- fixture datasets
+
+Cloning does **not** give you:
+
+- Ollama models
+- local virtual environments
+- experiment logs under `logs/`
+- generated compare plots and summaries
+
+That means a fresh machine still needs:
+
+- Python environment setup
+- Ollama installation
+- model downloads with `ollama pull ...`
+
 ## Repository Layout
 
 ```text
@@ -70,6 +93,179 @@ You can also use the helper script:
 ```bash
 bash scripts/smoke_test.sh
 ```
+
+## Two-Laptop Setup
+
+This repository can be used in a practical proxy setup with:
+
+- one laptop acting as the `device`
+- one laptop acting as the `edge server`
+
+Recommended division:
+
+- device laptop:
+  - runs the experiment runner
+  - runs the local model
+  - makes routing decisions
+  - optionally forwards requests to the edge laptop
+- edge laptop:
+  - runs Ollama
+  - hosts the stronger edge model
+
+For the current codebase, the easiest setup is:
+
+- local backend on the device laptop: `http://localhost:11434`
+- edge backend on the edge laptop: `http://<EDGE_IP>:11434`
+
+### Device Laptop Setup
+
+1. Clone the repository.
+
+```bash
+git clone <your-repo-url>
+cd mobile-edge-routing
+```
+
+2. Create a Python environment and install dependencies.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+3. Install Ollama and pull the local model.
+
+Example for the Gemma 4 local/edge pair:
+
+```bash
+ollama pull gemma4:e2b
+```
+
+4. Start Ollama on the device laptop.
+
+```bash
+ollama serve
+```
+
+### Edge Laptop Setup
+
+1. Clone the repository if you want the same scripts and configs available there too.
+
+```bash
+git clone <your-repo-url>
+cd mobile-edge-routing
+```
+
+2. Install Ollama and pull the edge model.
+
+```bash
+ollama pull gemma4:e4b
+```
+
+3. Start Ollama on the edge laptop.
+
+```bash
+ollama serve
+```
+
+4. Find the edge laptop IP address.
+
+```bash
+hostname -I
+```
+
+If the IP is `192.168.0.55`, then the edge base URL is:
+
+```text
+http://192.168.0.55:11434
+```
+
+### Health Checks for Device + Edge
+
+From the device laptop, verify both endpoints:
+
+```bash
+LOCAL_BASE_URL=http://localhost:11434 \
+EDGE_BASE_URL=http://192.168.0.55:11434 \
+bash scripts/check_gemma4_pair.sh
+```
+
+### Gemma 4 Pair Pilot
+
+From the device laptop:
+
+```bash
+LOCAL_BASE_URL=http://localhost:11434 \
+EDGE_BASE_URL=http://192.168.0.55:11434 \
+bash scripts/run_gemma4_pair_pilot.sh
+```
+
+Optional overrides:
+
+```bash
+DATASET=gsm8k \
+MODE=hybrid_only \
+LIMIT=10 \
+LOCAL_BASE_URL=http://localhost:11434 \
+EDGE_BASE_URL=http://192.168.0.55:11434 \
+bash scripts/run_gemma4_pair_pilot.sh
+```
+
+### Full GSM8K Run
+
+From the device laptop:
+
+```bash
+DATASET=gsm8k \
+DATASET_SOURCE=real \
+DATA_PATH=datasets/real/gsm8k \
+LIMIT=100 \
+PROMPT_PROFILE=minimal_v1 \
+LOCAL_TEMPERATURE=0 \
+EDGE_TEMPERATURE=0 \
+LOCAL_TIMEOUT=120 \
+EDGE_TIMEOUT=120 \
+SKIP_FAILED_SAMPLES=1 \
+LOCAL_BACKEND_TYPE=real_local_backend \
+EDGE_BACKEND_TYPE=ollama_edge_backend \
+LOCAL_BASE_URL=http://localhost:11434 \
+EDGE_BASE_URL=http://192.168.0.55:11434 \
+EXCLUDE_FIRST_N_LATENCY=1 \
+bash scripts/run_all_modes.sh
+```
+
+### Full MMLU Run
+
+From the device laptop:
+
+```bash
+DATASET=mmlu \
+DATASET_SOURCE=real \
+DATA_PATH=datasets/real/mmlu \
+LIMIT=100 \
+PROMPT_PROFILE=benchmark_v2 \
+LOCAL_TEMPERATURE=0 \
+EDGE_TEMPERATURE=0 \
+LOCAL_TIMEOUT=120 \
+EDGE_TIMEOUT=120 \
+LOCAL_BACKEND_TYPE=real_local_backend \
+EDGE_BACKEND_TYPE=ollama_edge_backend \
+LOCAL_BASE_URL=http://localhost:11434 \
+EDGE_BASE_URL=http://192.168.0.55:11434 \
+EXCLUDE_FIRST_N_LATENCY=1 \
+bash scripts/run_all_modes.sh
+```
+
+### Where Results Appear
+
+After a run you should see:
+
+- per-sample logs in `logs/run-*.jsonl`
+- summaries in `logs/summary-*.csv`
+- compare outputs in `logs/compare/*.csv`
+- compare plots in `logs/compare/*.png`
+- presentation summaries in `logs/compare/*presentation-summary.csv`
 
 ## CLI Example
 
@@ -187,6 +383,7 @@ You can also use:
 ```bash
 bash scripts/check_local_ollama.sh
 bash scripts/check_ollama.sh
+bash scripts/check_gemma4_pair.sh
 ```
 
 5. Run `local_only` with the real local backend.

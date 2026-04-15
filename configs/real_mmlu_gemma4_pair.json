@@ -1,0 +1,28 @@
+{
+  "dataset": "mmlu",
+  "dataset_source": "real",
+  "data_path": "datasets/real/mmlu",
+  "mode": "hybrid_only",
+  "limit": 20,
+  "confidence_threshold": 0.6,
+  "skip_failed_samples": false,
+  "prompt_profile": "benchmark_v2",
+  "block_sizes": [20, 50, 100],
+  "local_backend": {
+    "backend_type": "real_local_backend",
+    "base_url": "http://localhost:11434",
+    "model_name": "gemma4:e2b",
+    "timeout": 120.0,
+    "quantization": null,
+    "confidence_estimator": "router_v1",
+    "temperature": 0.0
+  },
+  "edge_backend": {
+    "backend_type": "ollama_edge_backend",
+    "base_url": "http://localhost:11434",
+    "model_name": "gemma4:e4b",
+    "timeout": 120.0,
+    "quantization": null,
+    "temperature": 0.0
+  }
+}

@@ -27,16 +27,84 @@ class ModelBackend(Protocol):
 
 
 ConfidenceEstimator = str
+PromptProfile = str
 
 
-def _build_prompt(sample: DatasetSample) -> tuple[str, str]:
+MMLU_BENCHMARK_V2_EXAMPLES = [
+    {
+        "question": "What is the capital of Italy?",
+        "choices": ["Berlin", "Madrid", "Rome", "Lisbon"],
+        "answer": "C",
+    },
+    {
+        "question": "Which gas do plants primarily absorb from the atmosphere for photosynthesis?",
+        "choices": ["Oxygen", "Carbon dioxide", "Nitrogen", "Hydrogen"],
+        "answer": "B",
+    },
+    {
+        "question": "What is 9 multiplied by 7?",
+        "choices": ["56", "63", "72", "81"],
+        "answer": "B",
+    },
+    {
+        "question": "Who wrote the play Hamlet?",
+        "choices": ["Charles Dickens", "William Shakespeare", "Jane Austen", "Mark Twain"],
+        "answer": "B",
+    },
+    {
+        "question": "Which organ pumps blood through the human body?",
+        "choices": ["Liver", "Lung", "Kidney", "Heart"],
+        "answer": "D",
+    },
+]
+
+
+def _format_multiple_choice_examples(examples: list[dict[str, Any]]) -> str:
+    formatted = []
+    for example in examples:
+        options = "\n".join(
+            f"{chr(ord('A') + index)}. {choice}" for index, choice in enumerate(example["choices"])
+        )
+        formatted.append(
+            "Question:\n"
+            f"{example['question']}\n\n"
+            f"Choices:\n{options}\n\n"
+            f"Answer: {example['answer']}"
+        )
+    return "\n\n".join(formatted)
+
+
+def _build_prompt(sample: DatasetSample, prompt_profile: PromptProfile = "minimal_v1") -> tuple[str, str]:
     if sample.task_type == "multiple_choice":
         options = "\n".join(f"{chr(ord('A') + index)}. {choice}" for index, choice in enumerate(sample.choices))
+        if prompt_profile == "benchmark_v2":
+            exemplars = _format_multiple_choice_examples(MMLU_BENCHMARK_V2_EXAMPLES)
+            return (
+                "You will be given multiple-choice questions from an academic benchmark.\n"
+                "For each question, choose the single best answer.\n"
+                "Follow the examples, then answer the final question.\n\n"
+                f"{exemplars}\n\n"
+                "Now answer this question.\n\n"
+                f"Question:\n{sample.question}\n\nChoices:\n{options}\n\n"
+                "Return exactly one uppercase letter: A, B, C, or D.",
+                "You are a model for single-turn academic benchmarking. "
+                "Follow the five examples as answer-format demonstrations and return exactly one uppercase answer letter with no explanation.",
+            )
         return (
             f"Question:\n{sample.question}\n\nChoices:\n{options}\n\n"
             "Answer with only the single best choice letter.",
             "You are a model for single-turn academic benchmarking. "
             "Be concise and return only the requested answer format.",
+        )
+
+    if prompt_profile == "benchmark_v2":
+        return (
+            "Solve the following grade-school math word problem carefully.\n"
+            "Solve the problem step by step briefly.\n"
+            "On the last line, output exactly: Answer: <number>\n\n"
+            f"Question:\n{sample.question}",
+            "You are a model for single-turn academic benchmarking. "
+            "Provide a brief step-by-step solution, then on the final line output exactly: Answer: <number>.",
         )
 
     return (
@@ -172,10 +240,14 @@ class MockLocalBackend:
         model_name: str = "gemma3:1b",
         quantization: str | None = None,
         confidence_estimator: ConfidenceEstimator = "format_heuristic",
+        temperature: float | None = None,
+        prompt_profile: PromptProfile = "minimal_v1",
     ):
         self.model_name = model_name
         self.quantization = quantization
         self.confidence_estimator = confidence_estimator
+        self.temperature = temperature
+        self.prompt_profile = prompt_profile
         self.name = "mock_local_gemma3_1b"
 
     def generate(self, sample: DatasetSample) -> InferenceResult:
@@ -194,6 +266,8 @@ class MockLocalBackend:
                 "quantization": self.quantization,
                 "confidence_source": "mock_metadata",
                 "confidence_estimator": self.confidence_estimator,
+                "temperature": self.temperature,
+                "prompt_profile": self.prompt_profile,
             },
         )
 
@@ -214,9 +288,17 @@ class MockLocalBackend:
 
 
 class MockEdgeBackend:
-    def __init__(self, model_name: str = "gemma3:4b", quantization: str | None = None):
+    def __init__(
+        self,
+        model_name: str = "gemma3:4b",
+        quantization: str | None = None,
+        temperature: float | None = None,
+        prompt_profile: PromptProfile = "minimal_v1",
+    ):
         self.model_name = model_name
         self.quantization = quantization
+        self.temperature = temperature
+        self.prompt_profile = prompt_profile
         self.name = "mock_edge_gemma3_4b"
 
     def generate(self, sample: DatasetSample) -> InferenceResult:
@@ -234,6 +316,8 @@ class MockEdgeBackend:
                 "model_name": self.model_name,
                 "quantization": self.quantization,
                 "confidence_source": "mock_metadata",
+                "temperature": self.temperature,
+                "prompt_profile": self.prompt_profile,
             },
         )
 
@@ -255,6 +339,8 @@ class OllamaGenerationBackend:
         timeout: float,
         quantization: str | None = None,
         confidence_estimator: ConfidenceEstimator = "format_heuristic",
+        temperature: float | None = None,
+        prompt_profile: PromptProfile = "minimal_v1",
         client: OllamaClient | None = None,
     ):
         self.backend_type = backend_type
@@ -263,6 +349,8 @@ class OllamaGenerationBackend:
         self.timeout = timeout
         self.quantization = quantization
         self.confidence_estimator = confidence_estimator
+        self.temperature = temperature
+        self.prompt_profile = prompt_profile
         self.client = client or OllamaClient(base_url=base_url, model_name=model_name, timeout=timeout)
         self.name = backend_name
 
@@ -273,9 +361,12 @@ class OllamaGenerationBackend:
         return self.client.ensure_model_available()
 
     def generate(self, sample: DatasetSample) -> InferenceResult:
-        prompt, system_prompt = _build_prompt(sample)
+        prompt, system_prompt = _build_prompt(sample, prompt_profile=self.prompt_profile)
         started_at = time.perf_counter()
-        response = self.client.generate(prompt=prompt, system=system_prompt)
+        options = {}
+        if self.temperature is not None:
+            options["temperature"] = self.temperature
+        response = self.client.generate(prompt=prompt, system=system_prompt, options=options or None)
         elapsed_ms = (time.perf_counter() - started_at) * 1000.0
         generated_text = str(response.get("response", "")).strip()
         confidence, confidence_source = _extract_confidence(
@@ -303,6 +394,8 @@ class OllamaGenerationBackend:
                 "eval_count": response.get("eval_count"),
                 "confidence_source": confidence_source,
                 "confidence_estimator": self.confidence_estimator,
+                "temperature": self.temperature,
+                "prompt_profile": self.prompt_profile,
                 "model_response": response,
             },
         )
@@ -316,6 +409,8 @@ class RealLocalBackend(OllamaGenerationBackend):
         timeout: float = 60.0,
         quantization: str | None = None,
         confidence_estimator: ConfidenceEstimator = "format_heuristic",
+        temperature: float | None = None,
+        prompt_profile: PromptProfile = "minimal_v1",
         client: OllamaClient | None = None,
     ):
         super().__init__(
@@ -326,6 +421,8 @@ class RealLocalBackend(OllamaGenerationBackend):
             timeout=timeout,
             quantization=quantization,
             confidence_estimator=confidence_estimator,
+            temperature=temperature,
+            prompt_profile=prompt_profile,
             client=client,
         )
 
@@ -338,6 +435,8 @@ class OllamaEdgeBackend(OllamaGenerationBackend):
         timeout: float = 60.0,
         quantization: str | None = None,
         confidence_estimator: ConfidenceEstimator = "format_heuristic",
+        temperature: float | None = None,
+        prompt_profile: PromptProfile = "minimal_v1",
         client: OllamaClient | None = None,
     ):
         super().__init__(
@@ -348,6 +447,8 @@ class OllamaEdgeBackend(OllamaGenerationBackend):
             timeout=timeout,
             quantization=quantization,
             confidence_estimator=confidence_estimator,
+            temperature=temperature,
+            prompt_profile=prompt_profile,
             client=client,
         )
 
@@ -360,6 +461,8 @@ class BackendConfig:
     base_url: str | None = None
     timeout: float | None = None
     confidence_estimator: ConfidenceEstimator = "format_heuristic"
+    temperature: float | None = None
+    prompt_profile: PromptProfile = "minimal_v1"
 
 
 def create_local_backend(config: BackendConfig) -> ModelBackend:
@@ -368,6 +471,8 @@ def create_local_backend(config: BackendConfig) -> ModelBackend:
             model_name=config.model_name,
             quantization=config.quantization,
             confidence_estimator=config.confidence_estimator,
+            temperature=config.temperature,
+            prompt_profile=config.prompt_profile,
         )
     if config.backend_type == "real_local_backend":
         return RealLocalBackend(
@@ -376,18 +481,27 @@ def create_local_backend(config: BackendConfig) -> ModelBackend:
             timeout=config.timeout or 60.0,
             quantization=config.quantization,
             confidence_estimator=config.confidence_estimator,
+            temperature=config.temperature,
+            prompt_profile=config.prompt_profile,
         )
     raise ValueError(f"Unsupported local backend type: {config.backend_type}")
 
 
 def create_edge_backend(config: BackendConfig) -> ModelBackend:
     if config.backend_type == "mock_edge_backend":
-        return MockEdgeBackend(model_name=config.model_name, quantization=config.quantization)
+        return MockEdgeBackend(
+            model_name=config.model_name,
+            quantization=config.quantization,
+            temperature=config.temperature,
+            prompt_profile=config.prompt_profile,
+        )
     if config.backend_type == "ollama_edge_backend":
         return OllamaEdgeBackend(
             base_url=config.base_url or "http://localhost:11434",
             model_name=config.model_name,
             timeout=config.timeout or 60.0,
             quantization=config.quantization,
+            temperature=config.temperature,
+            prompt_profile=config.prompt_profile,
         )
     raise ValueError(f"Unsupported edge backend type: {config.backend_type}")

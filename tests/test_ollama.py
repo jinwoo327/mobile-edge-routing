@@ -26,6 +26,9 @@ class FakeHttpResponse:
 class FakeOllamaClient:
     def __init__(self, response: dict):
         self.response = response
+        self.last_prompt = None
+        self.last_system = None
+        self.last_options = None
 
     def health_check(self) -> dict:
         return {"reachable": True, "model_available": True}
@@ -34,6 +37,9 @@ class FakeOllamaClient:
         return self.health_check()
 
     def generate(self, prompt: str, system: str | None = None, options: dict | None = None) -> dict:
+        self.last_prompt = prompt
+        self.last_system = system
+        self.last_options = options
         return self.response
 
 
@@ -119,6 +125,54 @@ class OllamaTests(unittest.TestCase):
         self.assertEqual(result.metadata["confidence_source"], "format_heuristic")
         self.assertGreater(result.confidence, 0.0)
 
+    def test_real_local_backend_passes_temperature_and_prompt_profile(self) -> None:
+        sample = DatasetSample(
+            sample_id="1",
+            dataset="mmlu",
+            task_type="multiple_choice",
+            question="Capital of France?",
+            choices=["Berlin", "Paris", "Rome", "Madrid"],
+            answer="B",
+        )
+        client = FakeOllamaClient({"response": "B", "total_duration": 1000000})
+        backend = RealLocalBackend(
+            client=client,
+            model_name="gemma3:1b",
+            temperature=0.0,
+            prompt_profile="benchmark_v2",
+        )
+
+        result = backend.generate(sample)
+
+        self.assertEqual(client.last_options, {"temperature": 0.0})
+        self.assertIn("Return exactly one uppercase letter", client.last_prompt)
+        self.assertIn("Follow the examples", client.last_prompt)
+        self.assertGreaterEqual(client.last_prompt.count("Answer:"), 5)
+        self.assertEqual(result.metadata["temperature"], 0.0)
+        self.assertEqual(result.metadata["prompt_profile"], "benchmark_v2")
+
+    def test_gsm8k_benchmark_v2_uses_answer_line_format(self) -> None:
+        sample = DatasetSample(
+            sample_id="1",
+            dataset="gsm8k",
+            task_type="open_ended",
+            question="Tom has 3 apples and buys 4 more. How many apples does he have now?",
+            answer="7",
+        )
+        client = FakeOllamaClient({"response": "Add 3 and 4.\nAnswer: 7", "total_duration": 1000000})
+        backend = RealLocalBackend(
+            client=client,
+            model_name="gemma3:1b",
+            temperature=0.0,
+            prompt_profile="benchmark_v2",
+        )
+
+        result = backend.generate(sample)
+
+        self.assertIn("Solve the problem step by step briefly.", client.last_prompt)
+        self.assertIn("On the last line, output exactly: Answer: <number>", client.last_prompt)
+        self.assertEqual(result.prediction, "7")
+
     def test_router_v1_penalizes_more_complex_question(self) -> None:
         simple_sample = DatasetSample(
             sample_id="1",
@@ -150,6 +204,23 @@ class OllamaTests(unittest.TestCase):
 
         self.assertEqual(simple_result.metadata["confidence_source"], "router_v1")
         self.assertLess(complex_result.confidence, simple_result.confidence)
+
+    def test_backend_factory_passes_prompt_profile_and_temperature(self) -> None:
+        backend = create_local_backend(
+            BackendConfig(
+                backend_type="real_local_backend",
+                model_name="gemma3:1b",
+                base_url="http://localhost:11434",
+                timeout=60.0,
+                quantization="Q4_K_M",
+                temperature=0.0,
+                prompt_profile="benchmark_v2",
+                confidence_estimator="router_v1",
+            )
+        )
+        self.assertIsInstance(backend, RealLocalBackend)
+        self.assertEqual(backend.temperature, 0.0)
+        self.assertEqual(backend.prompt_profile, "benchmark_v2")
 
 
 if __name__ == "__main__":

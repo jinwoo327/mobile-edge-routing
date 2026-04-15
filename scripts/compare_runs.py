@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Exclude the first N samples from latency averaging to reduce model warm-up effects.",
     )
+    parser.add_argument(
+        "--plot-latency-stat",
+        choices=["mean", "median"],
+        default="median",
+        help="Latency statistic to use on the plot x-axis.",
+    )
     return parser
 
 
@@ -50,7 +56,11 @@ def main() -> None:
 
     if args.plot_path:
         try:
-            x_key = "mean_latency_ms_excluding_warmup" if args.exclude_first_n_latency > 0 else "mean_latency_ms"
+            x_key = (
+                f"{args.plot_latency_stat}_latency_ms_excluding_warmup"
+                if args.exclude_first_n_latency > 0
+                else f"{args.plot_latency_stat}_latency_ms"
+            )
             plot_quality_latency(rows, args.plot_path, x_key=x_key)
         except RuntimeError as exc:
             print(f"plot_error={exc}")
@@ -62,6 +72,7 @@ def main() -> None:
                 "comparison_csv": str(output_csv),
                 "run_count": len(rows),
                 "exclude_first_n_latency": args.exclude_first_n_latency,
+                "plot_latency_stat": args.plot_latency_stat,
             },
             indent=2,
         )

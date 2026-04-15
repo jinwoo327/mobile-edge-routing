@@ -18,6 +18,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["local_only", "edge_only", "hybrid_only"], default=None)
     parser.add_argument("--limit", type=int, default=None, help="Maximum number of samples to run.")
     parser.add_argument("--confidence-threshold", type=float, default=None)
+    parser.add_argument(
+        "--skip-failed-samples",
+        action="store_true",
+        default=None,
+        help="Skip failed samples and continue until the requested number of successful samples is reached or the dataset is exhausted.",
+    )
+    parser.add_argument("--prompt-profile", choices=["minimal_v1", "benchmark_v2"], default=None)
     parser.add_argument("--block-sizes", type=int, nargs="+", default=None)
     parser.add_argument("--log-dir", default=None)
     parser.add_argument("--local-backend-type", choices=["mock_local_backend", "real_local_backend"], default=None)
@@ -25,12 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local-model-name", default=None)
     parser.add_argument("--local-timeout", type=float, default=None)
     parser.add_argument("--local-quantization", default=None)
+    parser.add_argument("--local-temperature", type=float, default=None)
     parser.add_argument("--local-confidence-estimator", choices=["format_heuristic", "router_v1"], default=None)
     parser.add_argument("--edge-backend-type", choices=["mock_edge_backend", "ollama_edge_backend"], default=None)
     parser.add_argument("--edge-base-url", default=None)
     parser.add_argument("--edge-model-name", default=None)
     parser.add_argument("--edge-timeout", type=float, default=None)
     parser.add_argument("--edge-quantization", default=None)
+    parser.add_argument("--edge-temperature", type=float, default=None)
     parser.add_argument(
         "--check-local-health",
         action="store_true",
@@ -83,6 +92,8 @@ def check_local_health(config: dict) -> int:
             base_url=config["local_backend"].get("base_url"),
             timeout=config["local_backend"].get("timeout"),
             confidence_estimator=config["local_backend"].get("confidence_estimator", "router_v1"),
+            temperature=config["local_backend"].get("temperature"),
+            prompt_profile=config.get("prompt_profile", config["local_backend"].get("prompt_profile", "minimal_v1")),
         )
     )
     return _check_backend_health(
@@ -100,6 +111,8 @@ def check_edge_health(config: dict) -> int:
             quantization=config["edge_backend"].get("quantization"),
             base_url=config["edge_backend"].get("base_url"),
             timeout=config["edge_backend"].get("timeout"),
+            temperature=config["edge_backend"].get("temperature"),
+            prompt_profile=config.get("prompt_profile", config["edge_backend"].get("prompt_profile", "minimal_v1")),
         )
     )
     return _check_backend_health(
@@ -126,6 +139,8 @@ def main() -> None:
             mode=config["mode"],
             limit=config["limit"],
             confidence_threshold=config["confidence_threshold"],
+            skip_failed_samples=config["skip_failed_samples"],
+            prompt_profile=config["prompt_profile"],
             block_sizes=config["block_sizes"],
             data_path=config["data_path"],
             log_dir=config["log_dir"],
@@ -134,12 +149,14 @@ def main() -> None:
             local_model_name=config["local_backend"]["model_name"],
             local_timeout=config["local_backend"]["timeout"],
             local_quantization=config["local_backend"]["quantization"],
+            local_temperature=config["local_backend"]["temperature"],
             local_confidence_estimator=config["local_backend"]["confidence_estimator"],
             edge_backend_type=config["edge_backend"]["backend_type"],
             edge_base_url=config["edge_backend"]["base_url"],
             edge_model_name=config["edge_backend"]["model_name"],
             edge_timeout=config["edge_backend"]["timeout"],
             edge_quantization=config["edge_backend"]["quantization"],
+            edge_temperature=config["edge_backend"]["temperature"],
         )
     except OllamaError as exc:
         print(f"ollama_error={exc}")

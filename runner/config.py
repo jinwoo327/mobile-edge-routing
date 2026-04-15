@@ -13,6 +13,8 @@ DEFAULT_RUN_CONFIG: dict[str, Any] = {
     "mode": "hybrid_only",
     "limit": None,
     "confidence_threshold": 0.6,
+    "skip_failed_samples": False,
+    "prompt_profile": "benchmark_v2",
     "block_sizes": [20, 50, 100],
     "log_dir": "logs",
     "local_backend": {
@@ -22,6 +24,7 @@ DEFAULT_RUN_CONFIG: dict[str, Any] = {
         "timeout": 60.0,
         "quantization": None,
         "confidence_estimator": "router_v1",
+        "temperature": 0.0,
     },
     "edge_backend": {
         "backend_type": "mock_edge_backend",
@@ -29,6 +32,7 @@ DEFAULT_RUN_CONFIG: dict[str, Any] = {
         "model_name": "gemma3:4b",
         "timeout": 60.0,
         "quantization": None,
+        "temperature": 0.0,
     },
 }
 
@@ -55,6 +59,8 @@ def apply_cli_overrides(config: dict[str, Any], args: Any) -> dict[str, Any]:
         "mode": "mode",
         "limit": "limit",
         "confidence_threshold": "confidence_threshold",
+        "skip_failed_samples": "skip_failed_samples",
+        "prompt_profile": "prompt_profile",
         "block_sizes": "block_sizes",
         "log_dir": "log_dir",
     }
@@ -70,6 +76,7 @@ def apply_cli_overrides(config: dict[str, Any], args: Any) -> dict[str, Any]:
         "local_timeout": "timeout",
         "local_quantization": "quantization",
         "local_confidence_estimator": "confidence_estimator",
+        "local_temperature": "temperature",
     }
     for arg_name, config_key in local_overrides.items():
         value = getattr(args, arg_name)
@@ -82,11 +89,16 @@ def apply_cli_overrides(config: dict[str, Any], args: Any) -> dict[str, Any]:
         "edge_model_name": "model_name",
         "edge_timeout": "timeout",
         "edge_quantization": "quantization",
+        "edge_temperature": "temperature",
     }
     for arg_name, config_key in edge_overrides.items():
         value = getattr(args, arg_name)
         if value is not None:
             resolved["edge_backend"][config_key] = value
+
+    if resolved.get("prompt_profile") is not None:
+        resolved["local_backend"]["prompt_profile"] = resolved["prompt_profile"]
+        resolved["edge_backend"]["prompt_profile"] = resolved["prompt_profile"]
 
     return resolved
 
